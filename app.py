@@ -10,16 +10,16 @@ uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)"
 
 if uploaded_file is not None:
     try:
-        # Sécurité : On lit tout en texte (dtype=str) pour bloquer les erreurs de conversion C long
+        # Charger tout en texte brut pour éviter toute conversion d'entier intempestive
         df_data = pd.read_excel(uploaded_file, sheet_name="data", dtype=str)
         st.success("Fichier chargé avec succès !")
         
-        # Conversion sécurisée des colonnes numériques
+        # 2. Convertir proprement les colonnes numériques de ventes et qté en vrais chiffres
         for col in ["Vente$$$", "Qté_Livrée"]:
             if col in df_data.columns:
                 df_data[col] = pd.to_numeric(df_data[col].str.replace(',', '.', regex=False), errors='coerce').fillna(0)
 
-        # 2. Gestion et sélection multiple des Départements
+        # 3. Gestion et sélection multiple des Départements
         if "Département" in df_data.columns:
             df_data["Département"] = df_data["Département"].fillna("Inconnu")
             departements_dispo = sorted(df_data["Département"].unique(), key=str)
@@ -37,19 +37,6 @@ if uploaded_file is not None:
                 st.warning("Veuillez sélectionner au moins un département.")
                 st.stop()
 
-        # 3. Normalisation de la description du produit par No_Produit
-        if "No_Produit" in df_data.columns and "Description_Produit" in df_data.columns and "Département" in df_data.columns:
-            desc_mapping = {}
-            for prod, group in df_data.groupby('No_Produit'):
-                dept1_rows = group[group['Département'].isin(['1', '1.0', 1, 1.0])]
-                if not dept1_rows.empty and not dept1_rows['Description_Produit'].dropna().empty:
-                    desc_mapping[prod] = dept1_rows['Description_Produit'].dropna().iloc[0]
-                else:
-                    valid_descs = group['Description_Produit'].dropna()
-                    desc_mapping[prod] = valid_descs.iloc[0] if not valid_descs.empty else ""
-            
-            df_data['Description_Produit'] = df_data['No_Produit'].map(desc_mapping).fillna("")
-
         # 4. Traitement des dates et extraction des mois
         df_data["Date_Facture"] = pd.to_datetime(df_data["Date_Facture"], errors='coerce')
         df_data["Mois_Num"] = df_data["Date_Facture"].dt.month
@@ -62,11 +49,15 @@ if uploaded_file is not None:
         mois_ordre = ["avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre", "janvier", "février", "mars"]
         df_data["Mois_Nom"] = df_data["Mois_Num"].map(mois_map)
         
-        # Définition propre des colonnes d'index (sans dépendre d'une feuille externe manquante)
+        # 5. Définition des index et BLINDAGE ABSOLU (transformation de chaque index en texte strict)
         exclude_cols = ["Date_Facture", "Vente$$$", "Qté_Livrée", "Mois_Num", "Mois_Nom", "Département"]
         index_cols = [c for c in df_data.columns if c not in exclude_cols]
         
-        # 5. Pivot Ventes (sans dropna=False pour éviter l'explosion mémoire)
+        for col in index_cols:
+            df_data[col] = df_data[col].astype(str).str.replace(r'\.0$', '', regex=True)
+            df_data.loc[df_data[col] == "nan", col] = ""
+
+        # 6. Pivot Ventes
         df_pivot_vente = df_data.pivot_table(
             index=index_cols,
             columns="Mois_Nom",
@@ -76,7 +67,7 @@ if uploaded_file is not None:
         ).reset_index()
         df_pivot_vente["Indicateur"] = "Ventes ($)"
         
-        # 6. Pivot Quantité Livrée
+        # 7. Pivot Quantité Livrée
         df_pivot_qte = df_data.pivot_table(
             index=index_cols,
             columns="Mois_Nom",
@@ -86,7 +77,7 @@ if uploaded_file is not None:
         ).reset_index()
         df_pivot_qte["Indicateur"] = "Qté Livrée"
         
-        # Combinaison
+        # Combinaison des deux
         df_combined = pd.concat([df_pivot_vente, df_pivot_qte], ignore_index=True)
         
         for m in mois_ordre:
@@ -95,13 +86,12 @@ if uploaded_file is not None:
             else:
                 df_combined[m] = df_combined[m].fillna(0.0)
                 
-        # Calcul du Total
         df_combined["Total"] = df_combined[mois_ordre].sum(axis=1)
         
         final_cols = index_cols + ["Indicateur"] + mois_ordre + ["Total"]
         df_final = df_combined[final_cols]
         
-        # 7. CONTRÔLE DE BALANCEMENT AUTOMATIQUE
+        # 8. CONTRÔLE DE BALANCEMENT AUTOMATIQUE
         total_source = df_data["Vente$$$"].sum()
         total_rapport = df_final[df_final["Indicateur"] == "Ventes ($)"]["Total"].sum()
         
@@ -115,7 +105,7 @@ if uploaded_file is not None:
         else:
             st.error(f"⚠️ Écart détecté : {abs(total_source - total_rapport):,.2f} $")
 
-        # 8. SÉCURITÉ EXCEL
+        # 9. SÉCURITÉ EXCEL
         data_clean = df_data.drop(columns=["Mois_Num", "Mois_Nom"], errors="ignore").copy()
         for df_tocheck in [data_clean, df_final]:
             for col in df_tocheck.select_dtypes(include=['object', 'string']).columns:
@@ -123,7 +113,7 @@ if uploaded_file is not None:
                     lambda x: str(x).lstrip('=') if isinstance(x, str) and x.startswith('=') else x
                 )
 
-        # 9. Génération du fichier Excel en mémoire
+        # 10. Génération du fichier Excel en mémoire
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             data_clean.to_excel(writer, sheet_name="data", index=False)
