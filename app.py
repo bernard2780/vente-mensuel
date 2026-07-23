@@ -4,46 +4,27 @@ import streamlit as st
 
 st.title("📊 Générateur de Rapport des Ventes Mensuelles")
 st.write(
-    "Importez votre fichier Excel source pour générer le rapport croisé par"
-    " produit (d'avril à mars) filtré par **Département**."
+    "Importez votre fichier Excel source (`data`) pour générer"
+    " automatiquement le rapport croisé par produit (d'avril à mars) filtré"
+    " par **Département**."
 )
 
+# 1. Zone de téléchargement du fichier Excel
 uploaded_file = st.file_uploader(
     "Choisissez votre fichier Excel source (.xlsx)", type=["xlsx"]
 )
 
 if uploaded_file is not None:
   try:
-    # 1. Charger TOUT en texte brut pour bloquer les grands entiers
-    df_data = pd.read_excel(uploaded_file, sheet_name="data", dtype=str)
+    # Charger uniquement la feuille 'data'
+    df_data = pd.read_excel(uploaded_file, sheet_name="data")
     st.success("Fichier chargé avec succès !")
 
-    # 2. Nettoyer et convertir les colonnes de chiffres
-    for col in ["Vente$$$", "Qté_Livrée"]:
-      if col in df_data.columns:
-        df_data[col] = (
-            df_data[col]
-            .str.replace(" ", "", regex=False)
-            .str.replace(",", ".", regex=False)
-        )
-        df_data[col] = pd.to_numeric(df_data[col], errors="coerce").fillna(0)
-
-    # 3. Forcer TOUTES les autres colonnes en texte pur (Évite l'erreur C long)
-    for col in df_data.columns:
-      if col not in ["Vente$$$", "Qté_Livrée"]:
-        df_data[col] = (
-            df_data[col]
-            .fillna("")
-            .astype(str)
-            .str.replace(r"\.0$", "", regex=True)
-        )
-        df_data[col] = df_data[col].replace("nan", "")
-
-    # 4. Gestion des départements
+    # 2. Gestion et sélection multiple des Départements
     if "Département" in df_data.columns:
-      departements_dispo = sorted(
-          [d for d in df_data["Département"].unique() if d != ""]
-      )
+      df_data["Département"] = df_data["Département"].fillna("Inconnu")
+      departements_dispo = sorted(df_data["Département"].unique(), key=str)
+
       selected_departements = st.multiselect(
           "Sélectionnez le ou les départements :",
           options=departements_dispo,
@@ -57,7 +38,7 @@ if uploaded_file is not None:
         st.warning("Veuillez sélectionner au moins un département.")
         st.stop()
 
-    # 5. Dates et Mois
+    # 3. Traitement des dates et extraction des mois (Avril à Mars)
     df_data["Date_Facture"] = pd.to_datetime(
         df_data["Date_Facture"], errors="coerce"
     )
@@ -91,8 +72,9 @@ if uploaded_file is not None:
         "février",
         "mars",
     ]
-    df_data["Mois_Nom"] = df_data["Mois_Num"].map(mois_map).fillna("inconnu")
+    df_data["Mois_Nom"] = df_data["Mois_Num"].map(mois_map)
 
+    # 4. Identification automatique des colonnes d'index à partir de la source
     exclude_cols = [
         "Date_Facture",
         "Vente$$$",
@@ -103,30 +85,62 @@ if uploaded_file is not None:
     ]
     index_cols = [c for c in df_data.columns if c not in exclude_cols]
 
-    # 6. Regroupement sécurisé sans pivot_table pour éliminer l'erreur C long
-    def safe_group(data, val_col, ind_name):
-      piv = (
-          data.groupby(index_cols + ["Mois_Nom"])[val_col]
-          .sum()
-          .unstack(fill_value=0)
-          .reset_index()
+    # BLINDAGE STRICT : Convertir tous les index en texte pour bloquer l'erreur C long
+    for col in index_cols:
+      df_data[col] = (
+          df_data[col]
+          .astype(str)
+          .str.replace(r"\.0$", "", regex=True)
+          .replace("nan", "")
       )
-      for m in mois_ordre:
-        if m not in piv.columns:
-          piv[m] = 0.0
-      piv["Indicateur"] = ind_name
-      return piv
 
-    df_piv_v = safe_group(df_data, "Vente$$$", "Ventes ($)")
-    df_piv_q = safe_group(df_data, "Qté_Livrée", "Qté Livrée")
+    # Nettoyage des valeurs numériques de vente et quantité
+    for col in ["Vente$$$", "Qté_Livrée"]:
+      if col in df_data.columns:
+        df_data[col] = pd.to_numeric(df_data[col], errors="coerce").fillna(0)
 
-    df_combined = pd.concat([df_piv_v, df_piv_q], ignore_index=True)
+    # 5. Pivot Ventes
+    df_pivot_vente = (
+        df_data.pivot_table(
+            index=index_cols,
+            columns="Mois_Nom",
+            values="Vente$$$",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    df_pivot_vente["Indicateur"] = "Ventes ($)"
+
+    # 6. Pivot Quantité Livrée
+    df_pivot_qte = (
+        df_data.pivot_table(
+            index=index_cols,
+            columns="Mois_Nom",
+            values="Qté_Livrée",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    df_pivot_qte["Indicateur"] = "Qté Livrée"
+
+    # Combinaison des deux tableaux
+    df_combined = pd.concat([df_pivot_vente, df_pivot_qte], ignore_index=True)
+
+    for m in mois_ordre:
+      if m not in df_combined.columns:
+        df_combined[m] = 0.0
+      else:
+        df_combined[m] = df_combined[m].fillna(0.0)
+
+    # Calcul du Total
     df_combined["Total"] = df_combined[mois_ordre].sum(axis=1)
 
     final_cols = index_cols + ["Indicateur"] + mois_ordre + ["Total"]
     df_final = df_combined[final_cols]
 
-    # 7. Contrôle de balancement
+    # 7. CONTRÔLE DE BALANCEMENT AUTOMATIQUE
     total_source = df_data["Vente$$$"].sum()
     total_rapport = df_final[df_final["Indicateur"] == "Ventes ($)"][
         "Total"
@@ -137,7 +151,12 @@ if uploaded_file is not None:
     col1.metric("Total Ventes (Source Data)", f"{total_source:,.2f} $")
     col2.metric("Total Ventes (Rapport)", f"{total_rapport:,.2f} $")
 
-    # 8. Export Excel
+    if abs(total_source - total_rapport) < 0.01:
+      st.success("✅ Les montants balancent parfaitement !")
+    else:
+      st.warning(f"⚠️ Écart détecté : {abs(total_source - total_rapport):,.2f} $")
+
+    # 8. Génération du fichier Excel final avec les deux onglets
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
       df_data.drop(columns=["Mois_Num", "Mois_Nom"], errors="ignore").to_excel(
@@ -149,6 +168,7 @@ if uploaded_file is not None:
     st.subheader("Aperçu du rapport généré :")
     st.dataframe(df_final.head(10))
 
+    # Bouton de téléchargement
     st.download_button(
         label="📥 Télécharger le rapport Excel final",
         data=processed_data,
