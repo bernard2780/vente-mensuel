@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.title("📊 Générateur de Rapport des Ventes Mensuelles")
-st.write("Importez votre fichier Excel source pour générer deux onglets distincts (Ventes en $ et Quantités livrées) avec sous-totaux par **Division**, **Regroupement** et **Catégorie**.")
+st.write("Importez votre fichier Excel source pour générer les onglets séparés (**rapport ventes** et **rapport qté**) avec sous-totaux par **Division**, **Regroupement** et **Catégorie**.")
 
 # 1. Zone de téléchargement du fichier Excel
 uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)", type=["xlsx"])
@@ -70,15 +70,25 @@ if uploaded_file is not None:
         df_data["Mois_Nom"] = df_data["Mois_Num"].map(mois_map)
         
         index_cols = [c for c in df_rapport.columns if c not in mois_ordre and c != "Date_Facture" and c != "Indicateur"]
-        merge_keys = [c for c in index_cols if c in df_data.columns]
 
-        # 5. Fonction de génération avec sous-totaux hiérarchiques pour un onglet spécifique
-        def create_single_report(data, keys, months, val_col):
+        # 5. Fonction de génération des rapports avec sous-totaux hiérarchiques
+        def generate_report_with_subtotals(data, keys, months, val_col):
             valid_keys = [k for k in keys if k in data.columns]
             
-            has_div = any(k.lower() == "division" for k in valid_keys)
-            has_reg = any(k.lower() == "regroupement" for k in valid_keys)
-            has_cat = any(k.lower() == "catégorie" or k.lower() == "categorie" for k in valid_keys)
+            # Pivot initial pour regrouper par clé et par mois
+            base_pivoted = data.pivot_table(
+                index=valid_keys,
+                columns="Mois_Nom",
+                values=val_col,
+                aggfunc="sum",
+                fill_value=0,
+                dropna=False
+            ).reset_index()
+            
+            # S'assurer que tous les mois de l'ordre existent dans le dataframe
+            for m in months:
+                if m not in base_pivoted.columns:
+                    base_pivoted[m] = 0.0
             
             div_col = next((k for k in valid_keys if k.lower() == "division"), None)
             reg_col = next((k for k in valid_keys if k.lower() in ["regroupement", "regroup"]), None)
@@ -86,10 +96,10 @@ if uploaded_file is not None:
             
             rows = []
             
-            if has_div and has_reg and has_cat:
-                divisions = sorted(data[div_col].dropna().unique(), key=str)
+            if div_col and reg_col and cat_col:
+                divisions = sorted(base_pivoted[div_col].dropna().unique(), key=str)
                 for div in divisions:
-                    df_div = data[data[div_col] == div]
+                    df_div = base_pivoted[base_pivoted[div_col] == div]
                     regroupements = sorted(df_div[reg_col].dropna().unique(), key=str)
                     
                     for reg in regroupements:
@@ -100,8 +110,7 @@ if uploaded_file is not None:
                             df_cat = df_reg[df_reg[cat_col] == cat]
                             
                             # Lignes de détail
-                            df_cat_grouped = df_cat.groupby(valid_keys, dropna=False)[months].sum().reset_index()
-                            for _, row in df_cat_grouped.iterrows():
+                            for _, row in df_cat.iterrows():
                                 rows.append(row.to_dict())
                                 
                             # Sous-total Catégorie
@@ -143,34 +152,25 @@ if uploaded_file is not None:
                         sub_div["Description_Produit"] = ""
                     rows.append(sub_div)
             else:
-                df_grouped = data.groupby(valid_keys, dropna=False)[months].sum().reset_index()
-                for _, row in df_grouped.iterrows():
+                for _, row in base_pivoted.iterrows():
                     rows.append(row.to_dict())
                     
-            df_res = pd.DataFrame(rows)
-            return df_res
+            return pd.DataFrame(rows)
 
-        # Générer les deux dataframes distincts
-        df_vente_final = create_single_report(df_data, merge_keys, mois_ordre, col_vente_source)
-        df_qte_final = create_single_report(df_data, merge_keys, mois_ordre, "Qté_Livrée")
+        # Générer les deux rapports distincts
+        df_vente_final = generate_report_with_subtotals(df_data, index_cols, mois_ordre, col_vente_source)
+        df_qte_final = generate_report_with_subtotals(df_data, index_cols, mois_ordre, "Qté_Livrée")
         
-        for m in mois_ordre:
-            if m not in df_vente_final.columns:
-                df_vente_final[m] = 0.0
-            else:
-                df_vente_final[m] = df_vente_final[m].fillna(0.0)
-                
-            if m not in df_qte_final.columns:
-                df_qte_final[m] = 0.0
-            else:
-                df_qte_final[m] = df_qte_final[m].fillna(0.0)
-                
-        # Calcul du Total
-        df_vente_final["Total"] = df_vente_final[mois_ordre].sum(axis=1)
-        df_qte_final["Total"] = df_qte_final[mois_ordre].sum(axis=1)
-        
+        # S'assurer que toutes les colonnes de mois et totaux sont présentes
+        for df_res in [df_vente_final, df_qte_final]:
+            for m in mois_ordre:
+                if m not in df_res.columns:
+                    df_res[m] = 0.0
+                else:
+                    df_res[m] = df_res[m].fillna(0.0)
+            df_res["Total"] = df_res[mois_ordre].sum(axis=1)
+            
         final_cols = index_cols + mois_ordre + ["Total"]
-        
         for col in final_cols:
             if col not in df_vente_final.columns:
                 df_vente_final[col] = ""
@@ -182,6 +182,7 @@ if uploaded_file is not None:
         
         # 6. CONTRÔLE DE BALANCEMENT AUTOMATIQUE
         total_source = df_data[col_vente_source].sum()
+        # Exclure les lignes de sous-totaux pour vérifier le balancement exact des détails
         is_detail_row = ~df_vente_final.astype(str).apply(lambda x: x.str.contains("Total")).any(axis=1)
         total_rapport_detail = df_vente_final[is_detail_row]["Total"].sum()
         
@@ -203,7 +204,7 @@ if uploaded_file is not None:
                     lambda x: str(x).lstrip('=') if isinstance(x, str) and x.startswith('=') else x
                 )
 
-        # 8. Génération du fichier Excel en mémoire avec les 3 onglets
+        # 8. Génération du fichier Excel en mémoire avec les 3 onglets distincts
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             data_clean.to_excel(writer, sheet_name="data", index=False)
@@ -211,7 +212,7 @@ if uploaded_file is not None:
             df_qte_final.to_excel(writer, sheet_name="rapport qté", index=False)
         processed_data = output.getvalue()
         
-        st.subheader("Aperçu du rapport Ventes ($) :")
+        st.subheader("Aperçu de l'onglet 'rapport ventes' :")
         st.dataframe(df_vente_final.head(10))
         
         # Bouton de téléchargement
