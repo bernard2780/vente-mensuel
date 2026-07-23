@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.title("📊 Générateur de Rapport des Ventes Mensuelles")
-st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département** avec gestion intelligente des descriptions.")
+st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département**.")
 
 # 1. Zone de téléchargement du fichier Excel
 uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)", type=["xlsx"])
@@ -24,7 +24,7 @@ if uploaded_file is not None:
             selected_departements = st.multiselect(
                 "Sélectionnez le ou les départements :",
                 options=departements_dispo,
-                default=departements_dispo  # Tout sélectionné par défaut
+                default=departements_dispo
             )
             
             if selected_departements:
@@ -35,11 +35,9 @@ if uploaded_file is not None:
                 st.stop()
 
         # 3. Normalisation de la description du produit par No_Produit
-        # Priorité à la description du Département 01, sinon conservation de la description par défaut
         if "No_Produit" in df_data.columns and "Description_Produit" in df_data.columns and "Département" in df_data.columns:
             desc_mapping = {}
             for prod, group in df_data.groupby('No_Produit'):
-                # Chercher s'il y a des lignes dans le département 1 / 1.0
                 dept1_rows = group[group['Département'].isin([1, 1.0, '1', '1.0'])]
                 if not dept1_rows.empty and not dept1_rows['Description_Produit'].dropna().empty:
                     desc_mapping[prod] = dept1_rows['Description_Produit'].dropna().iloc[0]
@@ -99,10 +97,18 @@ if uploaded_file is not None:
         final_cols = index_cols + ["Indicateur"] + mois_ordre + ["Total"]
         df_final = df_combined[final_cols]
         
-        # 7. Génération du fichier Excel en mémoire pour téléchargement
+        # 7. SÉCURITÉ EXCEL : Neutraliser les textes commençant par '=' pour éviter l'erreur de formule
+        data_clean = df_data.drop(columns=["Mois_Num", "Mois_Nom"], errors="ignore").copy()
+        for df_tocheck in [data_clean, df_final]:
+            for col in df_tocheck.select_dtypes(include=['object', 'string']).columns:
+                df_tocheck[col] = df_tocheck[col].apply(
+                    lambda x: str(x).lstrip('=') if isinstance(x, str) and x.startswith('=') else x
+                )
+
+        # 8. Génération du fichier Excel en mémoire pour téléchargement
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df_data.drop(columns=["Mois_Num", "Mois_Nom"], errors="ignore").to_excel(writer, sheet_name="data", index=False)
+            data_clean.to_excel(writer, sheet_name="data", index=False)
             df_final.to_excel(writer, sheet_name="rapport mensuel", index=False)
         processed_data = output.getvalue()
         
