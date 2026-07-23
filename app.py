@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.title("📊 Générateur de Rapport des Ventes Mensuelles")
-st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département**.")
+st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département** avec balancement rigoureux.")
 
 # 1. Zone de téléchargement du fichier Excel
 uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)", type=["xlsx"])
@@ -34,7 +34,7 @@ if uploaded_file is not None:
                 st.warning("Veuillez sélectionner au moins un département.")
                 st.stop()
 
-        # 3. Normalisation de la description du produit par No_Produit
+        # 3. Normalisation de la description du produit par No_Produit (Priorité au Département 01)
         if "No_Produit" in df_data.columns and "Description_Produit" in df_data.columns and "Département" in df_data.columns:
             desc_mapping = {}
             for prod, group in df_data.groupby('No_Produit'):
@@ -45,7 +45,7 @@ if uploaded_file is not None:
                     valid_descs = group['Description_Produit'].dropna()
                     desc_mapping[prod] = valid_descs.iloc[0] if not valid_descs.empty else ""
             
-            df_data['Description_Produit'] = df_data['No_Produit'].map(desc_mapping)
+            df_data['Description_Produit'] = df_data['No_Produit'].map(desc_mapping).fillna("")
 
         # 4. Traitement des dates et extraction des mois
         df_data["Date_Facture"] = pd.to_datetime(df_data["Date_Facture"])
@@ -62,23 +62,25 @@ if uploaded_file is not None:
         index_cols = [c for c in df_rapport.columns if c not in mois_ordre and c != "Date_Facture"]
         merge_keys = [c for c in index_cols if c in df_data.columns]
         
-        # 5. Pivot Ventes
+        # 5. Pivot Ventes (avec dropna=False pour ne perdre aucune ligne)
         df_pivot_vente = df_data.pivot_table(
             index=merge_keys,
             columns="Mois_Nom",
             values="Vente$$$",
             aggfunc="sum",
-            fill_value=0
+            fill_value=0,
+            dropna=False
         ).reset_index()
         df_pivot_vente["Indicateur"] = "Ventes ($)"
         
-        # 6. Pivot Quantité Livrée
+        # 6. Pivot Quantité Livrée (avec dropna=False)
         df_pivot_qte = df_data.pivot_table(
             index=merge_keys,
             columns="Mois_Nom",
             values="Qté_Livrée",
             aggfunc="sum",
-            fill_value=0
+            fill_value=0,
+            dropna=False
         ).reset_index()
         df_pivot_qte["Indicateur"] = "Qté Livrée"
         
@@ -97,7 +99,21 @@ if uploaded_file is not None:
         final_cols = index_cols + ["Indicateur"] + mois_ordre + ["Total"]
         df_final = df_combined[final_cols]
         
-        # 7. SÉCURITÉ EXCEL : Neutraliser les textes commençant par '=' pour éviter l'erreur de formule
+        # 7. CONTRÔLE DE BALANCEMENT AUTOMATIQUE
+        total_source = df_data["Vente$$$"].sum()
+        total_rapport = df_final[df_final["Indicateur"] == "Ventes ($)"]["Total"].sum()
+        
+        st.subheader("🔍 Validation du balancement des ventes :")
+        col1, col2 = st.columns(2)
+        col1.metric("Total Ventes (Source Data)", f"{total_source:,.2f} $")
+        col2.metric("Total Ventes (Rapport)", f"{total_rapport:,.2f} $")
+        
+        if abs(total_source - total_rapport) < 0.01:
+            st.success("✅ Les montants balancent parfaitement entre la source et le rapport !")
+        else:
+            st.error(f"⚠️ Écart détecté : {abs(total_source - total_rapport):,.2f} $")
+
+        # 8. SÉCURITÉ EXCEL : Neutraliser les textes commençant par '='
         data_clean = df_data.drop(columns=["Mois_Num", "Mois_Nom"], errors="ignore").copy()
         for df_tocheck in [data_clean, df_final]:
             for col in df_tocheck.select_dtypes(include=['object', 'string']).columns:
@@ -105,7 +121,7 @@ if uploaded_file is not None:
                     lambda x: str(x).lstrip('=') if isinstance(x, str) and x.startswith('=') else x
                 )
 
-        # 8. Génération du fichier Excel en mémoire pour téléchargement
+        # 9. Génération du fichier Excel en mémoire pour téléchargement
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             data_clean.to_excel(writer, sheet_name="data", index=False)
