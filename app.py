@@ -16,17 +16,25 @@ if uploaded_file is not None:
         
         st.success("Fichier chargé avec succès !")
         
-        # 2. Sélection multiple des Départements
+        # 2. Gestion et sélection multiple des Départements (Tous sélectionnés par défaut)
         if "Département" in df_data.columns:
-            departements_dispo = sorted(df_data["Département"].dropna().unique())
+            # Nettoyer et convertir proprement les valeurs pour éviter les bugs d'affichage (ex: 1.0 -> 1)
+            df_data["Département"] = df_data["Département"].fillna("Inconnu")
+            departements_dispo = sorted(df_data["Département"].unique(), key=str)
+            
+            # Par défaut, tout est sélectionné
             selected_departements = st.multiselect(
-                "Sélectionnez le ou les départements (laisser vide pour tout inclure) :",
-                options=departements_dispo
+                "Sélectionnez le ou les départements :",
+                options=departements_dispo,
+                default=departements_dispo  # <-- TOUT EST SÉLECTIONNÉ PAR DÉFAUT
             )
             
             if selected_departements:
                 df_data = df_data[df_data["Département"].isin(selected_departements)]
                 st.info(f"Filtre appliqué : {len(df_data)} lignes conservées.")
+            else:
+                st.warning("Veuillez sélectionner au moins un département.")
+                st.stop()
 
         # 3. Traitement des dates et extraction des mois
         df_data["Date_Facture"] = pd.to_datetime(df_data["Date_Facture"])
