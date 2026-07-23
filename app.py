@@ -10,11 +10,16 @@ uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)"
 
 if uploaded_file is not None:
     try:
-        # Charger uniquement la feuille data de manière sécurisée
+        # Charger uniquement la feuille data
         df_data = pd.read_excel(uploaded_file, sheet_name="data")
         st.success("Fichier chargé avec succès !")
         
-        # Définition automatique des colonnes d'index (tout sauf les dates et valeurs numériques de base)
+        # CONVERSION DE SÉCURITÉ : Forcer No_Produit en texte pour éviter l'erreur "C long"
+        if "No_Produit" in df_data.columns:
+            df_data["No_Produit"] = df_data["No_Produit"].astype(str).str.replace(r'\.0$', '', regex=True)
+            df_data.loc[df_data["No_Produit"] == "nan", "No_Produit"] = ""
+
+        # Définition automatique des colonnes d'index
         exclude_cols = ["Date_Facture", "Vente$$$", "Qté_Livrée", "Mois_Num", "Mois_Nom"]
         index_cols = [c for c in df_data.columns if c not in exclude_cols]
         
@@ -46,7 +51,7 @@ if uploaded_file is not None:
                 st.warning("Veuillez sélectionner au moins un département.")
                 st.stop()
 
-        # 3. Normalisation de la description du produit par No_Produit (Priorité au Département 01)
+        # 3. Normalisation de la description du produit par No_Produit
         if "No_Produit" in df_data.columns and "Description_Produit" in df_data.columns and "Département" in df_data.columns:
             desc_mapping = {}
             for prod, group in df_data.groupby('No_Produit'):
@@ -73,11 +78,10 @@ if uploaded_file is not None:
         
         merge_keys = [c for c in index_cols if c in df_data.columns and c != "Département"]
 
-        # 5. Fonction de génération des rapports optimisée (sans surcharge mémoire)
+        # 5. Fonction de génération des rapports avec sous-totaux hiérarchiques
         def generate_report_with_subtotals(data, keys, months, val_col):
             valid_keys = [k for k in keys if k in data.columns]
             
-            # Utilisation standard sans dropna=False pour éviter l'explosion mémoire
             base_pivoted = data.pivot_table(
                 index=valid_keys,
                 columns="Mois_Nom",
@@ -189,7 +193,7 @@ if uploaded_file is not None:
                     lambda x: str(x).lstrip('=') if isinstance(x, str) and x.startswith('=') else x
                 )
 
-        # 8. Génération du fichier Excel avec onglets multiples et mise en page auto
+        # 8. Génération du fichier Excel avec onglets multiples
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             data_clean.to_excel(writer, sheet_name="data", index=False)
