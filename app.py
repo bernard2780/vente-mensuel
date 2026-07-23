@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.title("📊 Générateur de Rapport des Ventes Mensuelles")
-st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) avec Ventes ($) et Qté Livrée.")
+st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département**.")
 
 # 1. Zone de téléchargement du fichier Excel
 uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)", type=["xlsx"])
@@ -16,16 +16,16 @@ if uploaded_file is not None:
         
         st.success("Fichier chargé avec succès !")
         
-        # 2. Sélection multiple des Succursales
-        if "Succursale" in df_data.columns:
-            succursales_dispo = sorted(df_data["Succursale"].dropna().unique())
-            selected_succursales = st.multiselect(
-                "Sélectionnez la ou les succursales (laisser vide pour tout inclure) :",
-                options=succursales_dispo
+        # 2. Sélection multiple des Départements
+        if "Département" in df_data.columns:
+            departements_dispo = sorted(df_data["Département"].dropna().unique())
+            selected_departements = st.multiselect(
+                "Sélectionnez le ou les départements (laisser vide pour tout inclure) :",
+                options=departements_dispo
             )
             
-            if selected_succursales:
-                df_data = df_data[df_data["Succursale"].isin(selected_succursales)]
+            if selected_departements:
+                df_data = df_data[df_data["Département"].isin(selected_departements)]
                 st.info(f"Filtre appliqué : {len(df_data)} lignes conservées.")
 
         # 3. Traitement des dates et extraction des mois
