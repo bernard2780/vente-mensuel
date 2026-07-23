@@ -9,25 +9,26 @@ uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)"
 
 if uploaded_file is not None:
     try:
-        df_data = pd.read_excel(uploaded_file, sheet_name="data")
+        # Solution radicale : On lit TOUT en texte (dtype=str) pour bloquer définitivement les erreurs d'entiers
+        df_data = pd.read_excel(uploaded_file, sheet_name="data", dtype=str)
         st.success("Fichier chargé avec succès !")
         
-        # Sécurité sur les codes produits
-        if "No_Produit" in df_data.columns:
-            df_data["No_Produit"] = df_data["No_Produit"].astype(str).str.replace(r'\.0$', '', regex=True)
-            df_data.loc[df_data["No_Produit"] == "nan", "No_Produit"] = ""
+        # Conversion sécurisée des colonnes de valeurs en vrais nombres
+        for col in ["Vente$$$", "Qté_Livrée"]:
+            if col in df_data.columns:
+                df_data[col] = pd.to_numeric(df_data[col].str.replace(',', '.', regex=False), errors='coerce').fillna(0)
 
-        exclude_cols = ["Date_Facture", "Vente$$$", "Qté_Livrée", "Mois_Num", "Mois_Nom"]
-        index_cols = [c for c in df_data.columns if c not in exclude_cols]
-        
         col_vente_source = "Vente$$$"
         if col_vente_source not in df_data.columns:
             alternatives = [c for c in df_data.columns if "vente" in c.lower()]
             if alternatives:
                 col_vente_source = alternatives[0]
             else:
-                st.error("Erreur : La colonne 'Vente$$$' est introuvable.")
+                st.error("Erreur : La colonne des ventes est introuvable.")
                 st.stop()
+
+        exclude_cols = ["Date_Facture", col_vente_source, "Qté_Livrée", "Mois_Num", "Mois_Nom"]
+        index_cols = [c for c in df_data.columns if c not in exclude_cols]
 
         # Gestion des départements
         if "Département" in df_data.columns:
@@ -48,7 +49,7 @@ if uploaded_file is not None:
                 st.stop()
 
         # Traitement des dates et mois
-        df_data["Date_Facture"] = pd.to_datetime(df_data["Date_Facture"])
+        df_data["Date_Facture"] = pd.to_datetime(df_data["Date_Facture"], errors='coerce')
         df_data["Mois_Num"] = df_data["Date_Facture"].dt.month
         
         mois_ordre = ["avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre", "janvier", "février", "mars"]
@@ -61,7 +62,6 @@ if uploaded_file is not None:
         
         merge_keys = [c for c in index_cols if c in df_data.columns and c != "Département"]
 
-        # Fonction de pivot simple et robuste (sans sous-totaux manuels)
         def simple_pivot(data, keys, months, val_col):
             valid_keys = [k for k in keys if k in data.columns]
             pivoted = data.pivot_table(
