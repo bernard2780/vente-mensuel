@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.title("📊 Générateur de Rapport des Ventes Mensuelles")
-st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département**.")
+st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département** avec gestion intelligente des descriptions.")
 
 # 1. Zone de téléchargement du fichier Excel
 uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)", type=["xlsx"])
@@ -18,15 +18,13 @@ if uploaded_file is not None:
         
         # 2. Gestion et sélection multiple des Départements (Tous sélectionnés par défaut)
         if "Département" in df_data.columns:
-            # Nettoyer et convertir proprement les valeurs pour éviter les bugs d'affichage (ex: 1.0 -> 1)
             df_data["Département"] = df_data["Département"].fillna("Inconnu")
             departements_dispo = sorted(df_data["Département"].unique(), key=str)
             
-            # Par défaut, tout est sélectionné
             selected_departements = st.multiselect(
                 "Sélectionnez le ou les départements :",
                 options=departements_dispo,
-                default=departements_dispo  # <-- TOUT EST SÉLECTIONNÉ PAR DÉFAUT
+                default=departements_dispo  # Tout sélectionné par défaut
             )
             
             if selected_departements:
@@ -36,7 +34,22 @@ if uploaded_file is not None:
                 st.warning("Veuillez sélectionner au moins un département.")
                 st.stop()
 
-        # 3. Traitement des dates et extraction des mois
+        # 3. Normalisation de la description du produit par No_Produit
+        # Priorité à la description du Département 01, sinon conservation de la description par défaut
+        if "No_Produit" in df_data.columns and "Description_Produit" in df_data.columns and "Département" in df_data.columns:
+            desc_mapping = {}
+            for prod, group in df_data.groupby('No_Produit'):
+                # Chercher s'il y a des lignes dans le département 1 / 1.0
+                dept1_rows = group[group['Département'].isin([1, 1.0, '1', '1.0'])]
+                if not dept1_rows.empty and not dept1_rows['Description_Produit'].dropna().empty:
+                    desc_mapping[prod] = dept1_rows['Description_Produit'].dropna().iloc[0]
+                else:
+                    valid_descs = group['Description_Produit'].dropna()
+                    desc_mapping[prod] = valid_descs.iloc[0] if not valid_descs.empty else ""
+            
+            df_data['Description_Produit'] = df_data['No_Produit'].map(desc_mapping)
+
+        # 4. Traitement des dates et extraction des mois
         df_data["Date_Facture"] = pd.to_datetime(df_data["Date_Facture"])
         df_data["Mois_Num"] = df_data["Date_Facture"].dt.month
         
@@ -51,7 +64,7 @@ if uploaded_file is not None:
         index_cols = [c for c in df_rapport.columns if c not in mois_ordre and c != "Date_Facture"]
         merge_keys = [c for c in index_cols if c in df_data.columns]
         
-        # Pivot Ventes
+        # 5. Pivot Ventes
         df_pivot_vente = df_data.pivot_table(
             index=merge_keys,
             columns="Mois_Nom",
@@ -61,7 +74,7 @@ if uploaded_file is not None:
         ).reset_index()
         df_pivot_vente["Indicateur"] = "Ventes ($)"
         
-        # Pivot Quantité Livrée
+        # 6. Pivot Quantité Livrée
         df_pivot_qte = df_data.pivot_table(
             index=merge_keys,
             columns="Mois_Nom",
@@ -86,7 +99,7 @@ if uploaded_file is not None:
         final_cols = index_cols + ["Indicateur"] + mois_ordre + ["Total"]
         df_final = df_combined[final_cols]
         
-        # 4. Génération du fichier Excel en mémoire pour téléchargement
+        # 7. Génération du fichier Excel en mémoire pour téléchargement
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df_data.drop(columns=["Mois_Num", "Mois_Nom"], errors="ignore").to_excel(writer, sheet_name="data", index=False)
