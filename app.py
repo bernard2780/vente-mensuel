@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.title("📊 Générateur de Rapport des Ventes Mensuelles")
-st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département** avec balancement rigoureux.")
+st.write("Importez votre fichier Excel source pour générer le rapport croisé par produit (d'avril à mars) filtré par **Département** avec la colonne **Vente$$$**.")
 
 # 1. Zone de téléchargement du fichier Excel
 uploaded_file = st.file_uploader("Choisissez votre fichier Excel source (.xlsx)", type=["xlsx"])
@@ -16,6 +16,18 @@ if uploaded_file is not None:
         
         st.success("Fichier chargé avec succès !")
         
+        # Vérification et sélection de la colonne des ventes ($)
+        col_vente_source = "Vente$$$"
+        if col_vente_source not in df_data.columns:
+            # Chercher des alternatives au cas où le nom exact varie légèrement
+            alternatives = [c for c in df_data.columns if "vente" in c.lower() or "$$$. " in c or "vente" in c.lower()]
+            if alternatives:
+                col_vente_source = alternatives[0]
+                st.warning(f"Colonne 'Vente$$$' introuvable. Utilisation de la colonne : '{col_vente_source}'")
+            else:
+                st.error("Erreur : La colonne 'Vente$$$' est introuvable dans votre feuille 'data'.")
+                st.stop()
+
         # 2. Gestion et sélection multiple des Départements (Tous sélectionnés par défaut)
         if "Département" in df_data.columns:
             df_data["Département"] = df_data["Département"].fillna("Inconnu")
@@ -62,18 +74,18 @@ if uploaded_file is not None:
         index_cols = [c for c in df_rapport.columns if c not in mois_ordre and c != "Date_Facture"]
         merge_keys = [c for c in index_cols if c in df_data.columns]
         
-        # 5. Pivot Ventes (avec dropna=False pour ne perdre aucune ligne)
+        # 5. Pivot Ventes (Strictement basé sur Vente$$$)
         df_pivot_vente = df_data.pivot_table(
             index=merge_keys,
             columns="Mois_Nom",
-            values="Vente$$$",
+            values=col_vente_source,
             aggfunc="sum",
             fill_value=0,
             dropna=False
         ).reset_index()
         df_pivot_vente["Indicateur"] = "Ventes ($)"
         
-        # 6. Pivot Quantité Livrée (avec dropna=False)
+        # 6. Pivot Quantité Livrée
         df_pivot_qte = df_data.pivot_table(
             index=merge_keys,
             columns="Mois_Nom",
@@ -99,8 +111,8 @@ if uploaded_file is not None:
         final_cols = index_cols + ["Indicateur"] + mois_ordre + ["Total"]
         df_final = df_combined[final_cols]
         
-        # 7. CONTRÔLE DE BALANCEMENT AUTOMATIQUE
-        total_source = df_data["Vente$$$"].sum()
+        # 7. CONTRÔLE DE BALANCEMENT AUTOMATIQUE SUR Vente$$$
+        total_source = df_data[col_vente_source].sum()
         total_rapport = df_final[df_final["Indicateur"] == "Ventes ($)"]["Total"].sum()
         
         st.subheader("🔍 Validation du balancement des ventes :")
