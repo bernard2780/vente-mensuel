@@ -73,17 +73,17 @@ if uploaded_file is not None:
         
         merge_keys = [c for c in index_cols if c in df_data.columns and c != "Département"]
 
-        # 5. Fonction de génération des rapports avec sous-totaux hiérarchiques sécurisés
+        # 5. Fonction de génération des rapports optimisée (sans surcharge mémoire)
         def generate_report_with_subtotals(data, keys, months, val_col):
             valid_keys = [k for k in keys if k in data.columns]
             
+            # Utilisation standard sans dropna=False pour éviter l'explosion mémoire
             base_pivoted = data.pivot_table(
                 index=valid_keys,
                 columns="Mois_Nom",
                 values=val_col,
                 aggfunc="sum",
-                fill_value=0,
-                dropna=False
+                fill_value=0
             ).reset_index()
             
             for m in months:
@@ -137,7 +137,6 @@ if uploaded_file is not None:
                     for col_to_blank in ["Regroupement", "Regroupe", "Catégorie", "No_Produit", "Description_Produit", "Sous_Catégorie"]:
                         if col_to_blank in valid_keys:
                             sub_div[col_to_blank] = ""
-                        sub_div[div_col] = f"Total Division: {div}"
                     rows.append(sub_div)
             else:
                 for _, row in base_pivoted.iterrows():
@@ -180,7 +179,7 @@ if uploaded_file is not None:
         if abs(total_source - total_rapport_detail) < 0.01:
             st.success("✅ Les montants balancent parfaitement entre la source et le rapport !")
         else:
-            st.error(f"⚠️ Écart détecté : {abs(total_source - total_rapport_detail):,.2f} $")
+            st.warning(f"⚠️ Écart détecté : {abs(total_source - total_rapport_detail):,.2f} $")
 
         # 7. SÉCURITÉ EXCEL
         data_clean = df_data.drop(columns=["Mois_Num", "Mois_Nom"], errors="ignore").copy()
